@@ -6,10 +6,7 @@ import random
 import gc
 
 from time import sleep
-from picozero import pico_temp_sensor, pico_led
 import machine
-import rp2
-import sys
 
 # DHT Sensor
 #sensor = dht.DHT22(Pin(22))
@@ -57,7 +54,7 @@ hum30m = ''
 temp60m = ''
 hum60m = ''
 
-# Replace the simple lists with fixed-size circular buffers
+# Fixed-size circular buffers, for storing the humidity and temperature readings
 buffer_size = seconds60m + 1  # Size for 1 hour + current reading
 tempList = [0] * buffer_size
 humList = [0] * buffer_size
@@ -80,7 +77,7 @@ while True:
     temp = sensor.temperature()
     hum = sensor.humidity()
 
-    # Replace list append with circular buffer update
+    # Circular buffer update, for humidity and temperature readings
     tempList[current_index] = temp
     humList[current_index] = hum
     
@@ -145,14 +142,10 @@ while True:
     oled.contrast(1)
 
     oled.fill(0)
-#     oled.text(f"{temp:.0f} {avgTemp:>2.0f} {temp5m:>2.0f} {temp10m:>2.0f} {temp30m:>2.0f}", randomX, randomY)   
-#     oled.text(f"{hum:>2} {avgHum:>2.0f} {hum5m:>2.0f} {hum10m:>2.0f} {hum30m:>2.0f}", randomX, randomY+10)
     oled.text(f"{temp:.0f} {temp5m} {temp10m} {temp30m} {temp60m}", randomX, randomY)   
     oled.text(f"{hum:>2} {hum5m} {hum10m} {hum30m} {hum60m}", randomX, randomY+10)
     oled.show()
     
-#     print(f"T: {temp}c {avgTemp:.0f} {temp5m:.0f} {temp10m:.0f} {temp30m:.0f} {temp60m:.0f}")
-#     print(f"H: {hum}% {avgHum:.0f} {hum5m:.0f} {hum10m:.0f} {hum30m:.0f} {hum60m:.0f}")
     print(f"T: {temp}c {avgTemp:.0f} {temp5m} {temp10m} {temp30m} {temp60m}")
     print(f"H: {hum}% {avgHum:.0f} {hum5m} {hum10m} {hum30m} {hum60m}")
     print(f"Mem free: {gc.mem_free()/1024:.2f}KB {len(tempList)}")
