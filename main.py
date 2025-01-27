@@ -160,16 +160,11 @@ while True:
     # print(humList)
         
   except OSError as e:
-    print(f'Failed to read sensor. Error: {e}')
-
-
-
-
-
-
-
-
-
-
-
+    if str(e) == "[Errno 110] ETIMEDOUT":
+        print('Sensor timeout, delaying...')
+        oled.text('Sensor timeout', randomX, randomY)
+        oled.show()
+        sleep(3)
+    else:
+        print(f'Failed to read sensor. Error: {e}')
 
