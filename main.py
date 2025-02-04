@@ -4,13 +4,13 @@ import dht
 from ssd1306 import SSD1306_I2C
 import random
 import gc
-
-from time import sleep
 import machine
 
-# DHT Sensor
+# DHT Sensor DHT11 or DHT22
 #sensor = dht.DHT22(Pin(22))
-sensor = dht.DHT11(Pin(6))
+sensor = dht.DHT11(Pin(6)) # DHT11
+
+# Control RGB LED, currently unused
 gled = machine.Pin(18, machine.Pin.OUT)
 rled = machine.Pin(19, machine.Pin.OUT)
 bled = machine.Pin(20, machine.Pin.OUT)
@@ -24,13 +24,14 @@ oled = SSD1306_I2C(WIDTH,HEIGHT,i2c)
 # Variables
 lowestTemp = 40 # Lowest temp the RGB cares about
 lowTemp = 45 # Highest temp the RGB cares about
+
+# Initialize variables
 sleepCount = 0
 displayMoveCount = 0
 averageCount = 0
 averageCount30m = 0
 avgTemp30m = 0
 avgHum30m = 0
-
 randomX = 0
 randomY = 0
 avgTemp = 0
@@ -38,13 +39,13 @@ avgHum = 0
 avgTemp60s = 0
 avgHum60s = 0
 
-# Seconds converted from minutes
+# Seconds converted from minutes, for convienence
 seconds5m = 5 * 60
 seconds10m = 10 * 60
 seconds30m = 30 * 60
 seconds60m = 60 * 60
 
-# Values 5, 10 and 30 minutes ago
+# Values 5, 10 and 30 minutes ago, must be strings for ease of showing empty values on OLED screen
 temp5m = ''
 hum5m = ''
 temp10m = ''
@@ -60,6 +61,7 @@ tempList = [0] * buffer_size
 humList = [0] * buffer_size
 current_index = 0
 
+# Turn all LED's off
 def led_off():
     gled.low()
     rled.low()
