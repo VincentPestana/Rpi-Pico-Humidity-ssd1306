@@ -8,6 +8,10 @@ try:
     import usocket as socket  # MicroPython
 except ImportError:
     import socket  # Fallback
+try:
+    import ujson as json
+except Exception:
+    import json
 import dht
 from ssd1306 import SSD1306_I2C
 import random
@@ -45,6 +49,10 @@ def connect_wifi(ssid: str, password: str, retries: int = 20):
 # HTTP server (non-blocking accept inside the main loop)
 server_sock = None
 
+# Configurable history for HTTP /data (points of recent seconds)
+POINTS_DEFAULT = 300
+POINTS_MAX = 1200
+
 def start_http_server():
     global server_sock
     if server_sock:
@@ -67,8 +75,12 @@ def start_http_server():
         server_sock = None
         return None
 
-def http_poll_and_respond(response_text: str):
-    """Try to accept a single connection and respond; non-blocking."""
+def http_poll_and_respond(build_text, build_json, build_html):
+    """Try to accept a single connection and respond; non-blocking.
+    build_text(): returns plain text status
+    build_json(points:int): returns JSON string with recent data
+    build_html(): returns HTML dashboard page
+    """
     global server_sock
     if not server_sock:
         return
@@ -78,15 +90,66 @@ def http_poll_and_respond(response_text: str):
         return  # nothing to accept right now
     try:
         conn.settimeout(0.5)
-        _ = conn.recv(512)  # Read and ignore request
-        hdr = (
-            "HTTP/1.1 200 OK\r\n"
-            "Content-Type: text/plain; charset=utf-8\r\n"
-            "Connection: close\r\n"
-            "Cache-Control: no-store\r\n\r\n"
-        )
-        conn.send(hdr)
-        conn.send(response_text)
+        req = conn.recv(512)  # Read request head
+        if not req:
+            return
+        # Parse very small subset of HTTP
+        try:
+            first = req.split(b"\r\n", 1)[0]
+            parts = first.split()
+            method = parts[0].decode()
+            target = parts[1].decode() if len(parts) > 1 else "/"
+        except Exception:
+            method = "GET"
+            target = "/"
+
+        path, _, query = target.partition("?")
+
+        if path == "/data":
+            # Parse points=N
+            points = POINTS_DEFAULT
+            if query:
+                for kv in query.split("&"):
+                    k, _, v = kv.partition("=")
+                    if k == "points":
+                        try:
+                            points = int(v)
+                        except Exception:
+                            points = POINTS_DEFAULT
+            if points < 10:
+                points = 10
+            if points > POINTS_MAX:
+                points = POINTS_MAX
+            payload = build_json(points)
+            hdr = (
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: application/json; charset=utf-8\r\n"
+                "Connection: close\r\n"
+                "Cache-Control: no-store\r\n\r\n"
+            )
+            conn.send(hdr)
+            conn.send(payload)
+        elif path == "/text":
+            payload = build_text()
+            hdr = (
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: text/plain; charset=utf-8\r\n"
+                "Connection: close\r\n"
+                "Cache-Control: no-store\r\n\r\n"
+            )
+            conn.send(hdr)
+            conn.send(payload)
+        else:
+            # default dashboard
+            payload = build_html()
+            hdr = (
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: text/html; charset=utf-8\r\n"
+                "Connection: close\r\n"
+                "Cache-Control: no-store\r\n\r\n"
+            )
+            conn.send(hdr)
+            conn.send(payload)
     except Exception as e:
         try:
             conn.send("HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\n\r\n")
@@ -168,6 +231,65 @@ if WIFI_SSID and WIFI_PASSWORD:
 else:
     print("No WiFi credentials found in secrets.py; HTTP disabled.")
 
+# Track how many readings we have captured (for data endpoint)
+readings_count = 0
+
+def build_status_text(t, h):
+    return (
+        f"T: {t}c {avgTemp:.0f} {temp5m} {temp10m} {temp30m} {temp60m}\n"
+        f"H: {h}% {avgHum:.0f} {hum5m} {hum10m} {hum30m} {hum60m}\n"
+    )
+
+def build_data_json(points: int):
+    # Determine available points
+    available = readings_count if readings_count < buffer_size else buffer_size
+    n = points if points < available else available
+    if n <= 0:
+        return json.dumps({"t": [], "h": []})
+    # Collect from circular buffer ending at current_index-1
+    out_t = []
+    out_h = []
+    start = (current_index - n) % buffer_size
+    for i in range(n):
+        idx = (start + i) % buffer_size
+        out_t.append(tempList[idx])
+        out_h.append(humList[idx])
+    return json.dumps({"t": out_t, "h": out_h})
+
+def build_html_page():
+    return (
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>Pico W DHT - Live</title>"
+        "<style>body{font-family:system-ui,Segoe UI,Arial;margin:0;padding:12px;background:#0b0e12;color:#e6e8eb}"
+        "#bar{display:flex;gap:8px;align-items:center;margin-bottom:8px}"
+        "label{opacity:.8}input{width:6em}#chart{width:100%;height:240px;background:#11161d;border:1px solid #253041;border-radius:6px}"
+        ".legend{font-size:12px;opacity:.8;margin-left:auto}span.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px}"
+        "</style></head><body>"
+        "<div id='bar'>"
+        "<label>Points <input id='points' type='number' min='30' max='1200' step='10' value='" + str(POINTS_DEFAULT) + "'></label>"
+        "<div class='legend'><span class='dot' style='background:#4fc3f7'></span>Temp <span class='dot' style='background:#81c784'></span>Hum</div>"
+        "</div>"
+        "<canvas id='chart' width='800' height='240'></canvas>"
+        "<pre id='txt' style='opacity:.7'></pre>"
+        "<script>(function(){\n"
+        "const cvs=document.getElementById('chart');\nconst ctx=cvs.getContext('2d');\n"
+        "const txt=document.getElementById('txt');\nconst pointsEl=document.getElementById('points');\n"
+        "let pts=parseInt(pointsEl.value)||" + str(POINTS_DEFAULT) + ";\n"
+        "function scale(vals,min,max,size){const out=new Array(vals.length);const k=size/(max-min||1);for(let i=0;i<vals.length;i++)out[i]=(vals[i]-min)*k;return out}\n"
+        "function draw(data){const w=cvs.width,h=cvs.height;ctx.clearRect(0,0,w,h);ctx.fillStyle='#11161d';ctx.fillRect(0,0,w,h);\n"
+        "// grid\nctx.strokeStyle='#1e2734';ctx.lineWidth=1;for(let i=0;i<=5;i++){const y=i*h/5;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke()}\n"
+        "const t=data.t||[], u=data.h||[]; if(!t.length){return} const all=t.concat(u);\n"
+        "let mn=Math.min.apply(null,all), mx=Math.max.apply(null,all); if(mn===mx){mn-=1;mx+=1}\n"
+        "const st=scale(t,mn,mx,h), su=scale(u,mn,mx,h);\n"
+        "function plot(arr,color){ctx.strokeStyle=color;ctx.lineWidth=2;ctx.beginPath();for(let i=0;i<arr.length;i++){const x=i*(w/(arr.length-1||1));const y=h-arr[i];if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y)}ctx.stroke()}\n"
+        "plot(st,'#4fc3f7'); plot(su,'#81c784'); txt.textContent='min:'+mn+' max:'+mx+' last T:'+t[t.length-1]+' H:'+u[u.length-1];}\n"
+        "async function tick(){try{const r=await fetch('/data?points='+pts,{cache:'no-store'});const d=await r.json();draw(d)}catch(e){/* ignore */}}\n"
+        "pointsEl.addEventListener('change',()=>{let v=parseInt(pointsEl.value)||" + str(POINTS_DEFAULT) + ";v=Math.max(10,Math.min(" + str(POINTS_MAX) + ",v));pts=v;pointsEl.value=v;tick()});\n"
+        "setInterval(tick,2000); tick();\n"
+        "})();</script></body></html>"
+    )
+
 while True:
   try:
     # IMPORTANT TO BE 1
@@ -183,6 +305,7 @@ while True:
     # Circular buffer update, for humidity and temperature readings
     tempList[current_index] = temp
     humList[current_index] = hum
+    readings_count += 1
     
     # LED logic
     if temp < 40:
@@ -258,16 +381,13 @@ while True:
     oled.text(f"{hum:>2} {hum5m} {hum10m} {hum30m} {hum60m}", randomX, randomY+10)
     oled.show()
 
-    # Prepare HTTP response text (same info as printed)
-    http_text = (
-        f"T: {temp}c {avgTemp:.0f} {temp5m} {temp10m} {temp30m} {temp60m}\n"
-        f"H: {hum}% {avgHum:.0f} {hum5m} {hum10m} {hum30m} {hum60m}\n"
-        f"Mem free: {gc.mem_free()/1024:.2f}KB {len(tempList)}\n"
-    )
-
     # Handle one HTTP request per loop if server is running
     if server_sock:
-        http_poll_and_respond(http_text)
+        http_poll_and_respond(
+            lambda: build_status_text(temp, hum),
+            build_data_json,
+            build_html_page,
+        )
     else:
         # If WiFi creds exist but server is not up, try to (re)connect occasionally
         if WIFI_SSID and WIFI_PASSWORD:
