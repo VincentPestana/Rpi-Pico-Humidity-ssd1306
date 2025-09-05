@@ -50,8 +50,8 @@ def connect_wifi(ssid: str, password: str, retries: int = 20):
 server_sock = None
 
 # Configurable history for HTTP /data (points of recent seconds)
-POINTS_DEFAULT = 300
-POINTS_MAX = 1200
+POINTS_DEFAULT = 900
+POINTS_MAX = 3600
 
 def start_http_server():
     global server_sock
@@ -257,6 +257,7 @@ def build_data_json(points: int):
     return json.dumps({"t": out_t, "h": out_h})
 
 def build_html_page():
+    hours_max = POINTS_MAX / 3600
     return (
         "<!doctype html><html><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
@@ -267,25 +268,47 @@ def build_html_page():
         ".legend{font-size:12px;opacity:.8;margin-left:auto}span.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px}"
         "</style></head><body>"
         "<div id='bar'>"
-        "<label>Points <input id='points' type='number' min='30' max='1200' step='10' value='" + str(POINTS_DEFAULT) + "'></label>"
+        "<label>Points <input id='points' type='number' min='30' max='" + str(POINTS_MAX) + "' step='10' value='" + str(POINTS_DEFAULT) + "'></label>"
+        "<label style='margin-left:8px'>Decimate <input id='dec' type='checkbox' checked></label>"
+        "<label style='margin-left:8px'>Hours <input id='hours' type='number' min='0.1' max='" + ("%.2f" % hours_max) + "' step='0.1' value='" + ("%.1f" % hours_max) + "'></label>"
         "<div class='legend'><span class='dot' style='background:#4fc3f7'></span>Temp <span class='dot' style='background:#81c784'></span>Hum</div>"
         "</div>"
         "<canvas id='chart' width='800' height='240'></canvas>"
         "<pre id='txt' style='opacity:.7'></pre>"
         "<script>(function(){\n"
         "const cvs=document.getElementById('chart');\nconst ctx=cvs.getContext('2d');\n"
-        "const txt=document.getElementById('txt');\nconst pointsEl=document.getElementById('points');\n"
+        "const txt=document.getElementById('txt');\nconst pointsEl=document.getElementById('points');\nconst decEl=document.getElementById('dec');\nconst hoursEl=document.getElementById('hours');\n"
         "let pts=parseInt(pointsEl.value)||" + str(POINTS_DEFAULT) + ";\n"
+        "let fetchPts=Math.max(10,Math.min(" + str(POINTS_MAX) + ",Math.floor((parseFloat(hoursEl.value)||" + ("%.1f" % hours_max) + ")*3600)));\n"
         "function scale(vals,min,max,size){const out=new Array(vals.length);const k=size/(max-min||1);for(let i=0;i<vals.length;i++)out[i]=(vals[i]-min)*k;return out}\n"
+        "function bucketMinMax(vals, buckets){buckets=Math.max(1,Math.min(buckets,vals.length));const size=vals.length/buckets;const mins=new Array(buckets);const maxs=new Array(buckets);const avgs=new Array(buckets);for(let b=0;b<buckets;b++){let start=Math.floor(b*size), end=Math.floor((b+1)*size);if(b===buckets-1)end=vals.length;let mn=Infinity,mx=-Infinity,sum=0,c=0;for(let i=start;i<end;i++){const v=vals[i];if(v<mn)mn=v;if(v>mx)mx=v;sum+=v;c++}if(c===0){mn=mx=vals[Math.min(start,vals.length-1)];sum=mn;c=1}mins[b]=mn;maxs[b]=mx;avgs[b]=sum/c}return {mins,maxs,avgs}}\n"
+        "function drawBand(xCount, minScaled, maxScaled, color){const w=cvs.width,h=cvs.height;const step=(w/(xCount-1||1));ctx.beginPath();for(let i=0;i<xCount;i++){const x=i*step, y=h-maxScaled[i];if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y)}for(let i=xCount-1;i>=0;i--){const x=i*step, y=h-minScaled[i];ctx.lineTo(x,y)}ctx.closePath();ctx.fillStyle=color;ctx.globalAlpha=0.15;ctx.fill();ctx.globalAlpha=1}\n"
+        "function plot(arr,color){const w=cvs.width,h=cvs.height;ctx.strokeStyle=color;ctx.lineWidth=2;ctx.beginPath();for(let i=0;i<arr.length;i++){const x=i*(w/(arr.length-1||1));const y=h-arr[i];if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y)}ctx.stroke()}\n"
         "function draw(data){const w=cvs.width,h=cvs.height;ctx.clearRect(0,0,w,h);ctx.fillStyle='#11161d';ctx.fillRect(0,0,w,h);\n"
         "// grid\nctx.strokeStyle='#1e2734';ctx.lineWidth=1;for(let i=0;i<=5;i++){const y=i*h/5;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke()}\n"
-        "const t=data.t||[], u=data.h||[]; if(!t.length){return} const all=t.concat(u);\n"
+        "let t=data.t||[], u=data.h||[]; if(!t.length){return} const all=t.concat(u);\n"
         "let mn=Math.min.apply(null,all), mx=Math.max.apply(null,all); if(mn===mx){mn-=1;mx+=1}\n"
-        "const st=scale(t,mn,mx,h), su=scale(u,mn,mx,h);\n"
-        "function plot(arr,color){ctx.strokeStyle=color;ctx.lineWidth=2;ctx.beginPath();for(let i=0;i<arr.length;i++){const x=i*(w/(arr.length-1||1));const y=h-arr[i];if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y)}ctx.stroke()}\n"
-        "plot(st,'#4fc3f7'); plot(su,'#81c784'); txt.textContent='min:'+mn+' max:'+mx+' last T:'+t[t.length-1]+' H:'+u[u.length-1];}\n"
-        "async function tick(){try{const r=await fetch('/data?points='+pts,{cache:'no-store'});const d=await r.json();draw(d)}catch(e){/* ignore */}}\n"
-        "pointsEl.addEventListener('change',()=>{let v=parseInt(pointsEl.value)||" + str(POINTS_DEFAULT) + ";v=Math.max(10,Math.min(" + str(POINTS_MAX) + ",v));pts=v;pointsEl.value=v;tick()});\n"
+        "// Optional decimation to target Points with band (min-max)\n"
+        "let tt=t, uu=u, tBand=null, uBand=null;\n"
+        "if(decEl.checked){const buckets=Math.max(1,Math.min(pts,t.length));\n"
+        "  if(t.length>buckets){const bt=bucketMinMax(t,buckets);tt=bt.avgs;tBand={mins:bt.mins,maxs:bt.maxs};}\n"
+        "  if(u.length>buckets){const bu=bucketMinMax(u,buckets);uu=bu.avgs;uBand={mins:bu.mins,maxs:bu.maxs};}\n"
+        "}\n"
+        "// Recompute min/max for scaled drawing based on plotted arrays (not bands)\n"
+        "const plotAll=tt.concat(uu); mn=Math.min(mn,Math.min.apply(null,plotAll)); mx=Math.max(mx,Math.max.apply(null,plotAll)); if(mn===mx){mn-=1;mx+=1}\n"
+        "const st=scale(tt,mn,mx,h), su=scale(uu,mn,mx,h);\n"
+        "// Bands\n"
+        "if(tBand){const stmin=scale(tBand.mins,mn,mx,h), stmax=scale(tBand.maxs,mn,mx,h);drawBand(tBand.mins.length, stmin, stmax, '#4fc3f7');}\n"
+        "if(uBand){const sumin=scale(uBand.mins,mn,mx,h), sumax=scale(uBand.maxs,mn,mx,h);drawBand(uBand.mins.length, sumin, sumax, '#81c784');}\n"
+        "// Plot lines\nplot(st,'#4fc3f7'); plot(su,'#81c784');\n"
+        "// Overall min/max overlays\nctx.strokeStyle='#394a5f';ctx.setLineDash([4,4]);ctx.beginPath();ctx.moveTo(0,h-scale([mn],mn,mx,h)[0]);ctx.lineTo(w,h-scale([mn],mn,mx,h)[0]);ctx.stroke();ctx.beginPath();ctx.moveTo(0,h-scale([mx],mn,mx,h)[0]);ctx.lineTo(w,h-scale([mx],mn,mx,h)[0]);ctx.stroke();ctx.setLineDash([]);\n"
+        "txt.textContent='min:'+mn+' max:'+mx+' last T:'+t[t.length-1]+' H:'+u[u.length-1]+' | hrs:'+((fetchPts/3600).toFixed(2))+' pts:'+pts;}\n"
+        "async function tick(){try{const r=await fetch('/data?points='+fetchPts,{cache:'no-store'});const d=await r.json();draw(d)}catch(e){/* ignore */}}\n"
+        "function clampPts(){let v=parseInt(pointsEl.value)||" + str(POINTS_DEFAULT) + ";v=Math.max(10,Math.min(" + str(POINTS_MAX) + ",v));pts=v;pointsEl.value=v;}\n"
+        "function clampHours(){let hv=parseFloat(hoursEl.value)||" + ("%.1f" % hours_max) + ";hv=Math.max(0.1,Math.min(" + ("%.2f" % hours_max) + ",hv));hoursEl.value=hv.toFixed(1);fetchPts=Math.max(10,Math.min(" + str(POINTS_MAX) + ",Math.floor(hv*3600)));}\n"
+        "pointsEl.addEventListener('change',()=>{clampPts();tick()});\n"
+        "decEl.addEventListener('change',()=>{tick()});\n"
+        "hoursEl.addEventListener('change',()=>{clampHours();tick()});\n"
         "setInterval(tick,2000); tick();\n"
         "})();</script></body></html>"
     )
