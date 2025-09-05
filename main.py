@@ -1,16 +1,15 @@
+# Complete project details at https://RandomNerdTutorials.com/raspberry-pi-pico-dht11-dht22-micropython/
+
 from machine import Pin, I2C
 from time import sleep
 import dht
 from ssd1306 import SSD1306_I2C
 import random
 import gc
-import machine
 
-# DHT Sensor DHT11 or DHT22
+# DHT Sensor
 #sensor = dht.DHT22(Pin(22))
-sensor = dht.DHT11(Pin(6)) # DHT11
-
-# Control RGB LED, currently unused
+sensor = dht.DHT11(Pin(6))
 gled = machine.Pin(18, machine.Pin.OUT)
 rled = machine.Pin(19, machine.Pin.OUT)
 bled = machine.Pin(20, machine.Pin.OUT)
@@ -32,6 +31,7 @@ averageCount = 0
 averageCount30m = 0
 avgTemp30m = 0
 avgHum30m = 0
+
 randomX = 0
 randomY = 0
 avgTemp = 0
@@ -39,13 +39,13 @@ avgHum = 0
 avgTemp60s = 0
 avgHum60s = 0
 
-# Seconds converted from minutes, for convienence
+# Seconds converted from minutes
 seconds5m = 5 * 60
 seconds10m = 10 * 60
 seconds30m = 30 * 60
 seconds60m = 60 * 60
 
-# Values 5, 10 and 30 minutes ago, must be strings for ease of showing empty values on OLED screen
+# Values 5, 10 and 30 minutes ago
 temp5m = ''
 hum5m = ''
 temp10m = ''
@@ -142,12 +142,23 @@ while True:
     current_index = (current_index + 1) % buffer_size
 
     oled.contrast(1)
-
+    # Oled control
+    #if sleepCount % 5 == 0:
+#         oled.contrast(1)
+     #   oled.poweron()
+    #else:
+#         oled.contrast(0)
+        #oled.poweroff()
+    
     oled.fill(0)
+#     oled.text(f"{temp:.0f} {avgTemp:>2.0f} {temp5m:>2.0f} {temp10m:>2.0f} {temp30m:>2.0f}", randomX, randomY)   
+#     oled.text(f"{hum:>2} {avgHum:>2.0f} {hum5m:>2.0f} {hum10m:>2.0f} {hum30m:>2.0f}", randomX, randomY+10)
     oled.text(f"{temp:.0f} {temp5m} {temp10m} {temp30m} {temp60m}", randomX, randomY)   
     oled.text(f"{hum:>2} {hum5m} {hum10m} {hum30m} {hum60m}", randomX, randomY+10)
     oled.show()
     
+#     print(f"T: {temp}c {avgTemp:.0f} {temp5m:.0f} {temp10m:.0f} {temp30m:.0f} {temp60m:.0f}")
+#     print(f"H: {hum}% {avgHum:.0f} {hum5m:.0f} {hum10m:.0f} {hum30m:.0f} {hum60m:.0f}")
     print(f"T: {temp}c {avgTemp:.0f} {temp5m} {temp10m} {temp30m} {temp60m}")
     print(f"H: {hum}% {avgHum:.0f} {hum5m} {hum10m} {hum30m} {hum60m}")
     print(f"Mem free: {gc.mem_free()/1024:.2f}KB {len(tempList)}")
@@ -155,11 +166,4 @@ while True:
     # print(humList)
         
   except OSError as e:
-    if str(e) == "[Errno 110] ETIMEDOUT":
-        print('Sensor timeout, delaying...')
-        oled.text('Sensor timeout', randomX, randomY)
-        oled.show()
-        sleep(3)
-    else:
-        print(f'Failed to read sensor. Error: {e}')
-
+    print(e)

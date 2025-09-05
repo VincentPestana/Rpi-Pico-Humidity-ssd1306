@@ -165,4 +165,3 @@ class SSD1306_SPI(SSD1306):
 
 
 __version__ = '0.1.0'
-
