@@ -194,6 +194,12 @@ avgHum = 0
 avgTemp60s = 0
 avgHum60s = 0
 
+# OLED burn-in mitigation: jitter settings
+# Move the on-screen text every N seconds to spread pixel wear
+JITTER_SECONDS = 10  # default ~10s; keep small to reduce static image time
+JITTER_X_MAX = 10    # horizontal jitter range (pixels)
+JITTER_Y_MAX = 45    # vertical jitter range (pixels; allow two 8px lines)
+
 # Seconds converted from minutes
 seconds5m = 5 * 60
 seconds10m = 10 * 60
@@ -259,7 +265,10 @@ def mem_update_and_maybe_log(current_seconds):
         gc.collect()
         alloc = gc.mem_alloc()
         free = gc.mem_free()
-        mem_stats_line = _format_mem_line(alloc, free, mem_min_free)
+        base = _format_mem_line(alloc, free, mem_min_free)
+        # Append buffer lengths and filled count
+        filled = readings_count if readings_count < buffer_size else buffer_size
+        mem_stats_line = base + " | samples:{}/{}".format(filled, buffer_size)
         print(mem_stats_line)
         mem_last_report_sec = current_seconds
 
@@ -269,7 +278,9 @@ def build_status_text(t, h):
     if not mem_stats_line:
         alloc = gc.mem_alloc()
         free = gc.mem_free()
-        mem_stats_line = _format_mem_line(alloc, free, mem_min_free)
+        base = _format_mem_line(alloc, free, mem_min_free)
+        filled = readings_count if readings_count < buffer_size else buffer_size
+        mem_stats_line = base + " | samples:{}/{}".format(filled, buffer_size)
     return (
         f"T: {t}c {avgTemp:.0f} {temp5m} {temp10m} {temp30m} {temp60m}\n"
         f"H: {h}% {avgHum:.0f} {hum5m} {hum10m} {hum30m} {hum60m}\n"
@@ -310,7 +321,7 @@ def build_html_page():
         "<label style='margin-left:8px'>Hours <input id='hours' type='number' min='1' max='" + str(hours_max) + "' step='1' value='1'></label>"
         "<div class='legend'><span class='dot' style='background:#4fc3f7'></span>Temp <span class='dot' style='background:#81c784'></span>Hum</div>"
         "</div>"
-        "<canvas id='chart' width='800' height='240'></canvas>"
+        "<canvas id='chart' width='1600' height='240'></canvas>"
         "<pre id='txt' style='opacity:.7'></pre>"
         "<pre style='opacity:.7'>" + str(mem_stats_line) + "</pre>"
         "<script>(function(){\n"
@@ -399,12 +410,12 @@ while True:
     avgTemp = (avgTemp + temp ) / 2
     avgHum = (avgHum + hum) / 2
     
-    # Every 10s change the location
-    if displayMoveCount > 30:
+    # Every JITTER_SECONDS change the location
+    if displayMoveCount >= JITTER_SECONDS:
         displayMoveCount = 0
         # Oled draw in different spots
-        randomX = random.randint(0, 10)
-        randomY = random.randint(0, 45)
+        randomX = random.randint(0, JITTER_X_MAX)
+        randomY = random.randint(0, JITTER_Y_MAX)
     
     # Update the historical readings using circular buffer math
     if sleepCount >= seconds5m:
@@ -464,8 +475,8 @@ while True:
     
 #     print(f"T: {temp}c {avgTemp:.0f} {temp5m:.0f} {temp10m:.0f} {temp30m:.0f} {temp60m:.0f}")
 #     print(f"H: {hum}% {avgHum:.0f} {hum5m:.0f} {hum10m:.0f} {hum30m:.0f} {hum60m:.0f}")
-    print(f"T: {temp}c {avgTemp:.0f} {temp5m} {temp10m} {temp30m} {temp60m}")
-    print(f"H: {hum}% {avgHum:.0f} {hum5m} {hum10m} {hum30m} {hum60m}")
+    print(f"T: {temp}c {avgTemp:.0f} {temp5m} {temp10m} {temp30m} {temp60m}\nH: {hum}% {avgHum:.0f} {hum5m} {hum10m} {hum30m} {hum60m}")
+    # print(f"H: {hum}% {avgHum:.0f} {hum5m} {hum10m} {hum30m} {hum60m}")
     # Memory line is logged periodically by mem_update_and_maybe_log()
     # print(tempList)
     # print(humList)
