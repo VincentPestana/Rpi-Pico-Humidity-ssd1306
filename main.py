@@ -234,10 +234,46 @@ else:
 # Track how many readings we have captured (for data endpoint)
 readings_count = 0
 
+# --- Lightweight memory stats helper ---
+# Tracks free low-water and prints a compact line every ~30 seconds.
+mem_min_free = gc.mem_free()
+mem_last_report_sec = -1
+mem_stats_line = ""
+
+def _format_mem_line(alloc, free, low):
+    total = alloc + free
+    # Use integer KB to stay compact and avoid float formatting
+    return "Mem used/free/total: {}K/{}K/{}K (low {}K free)".format(
+        alloc // 1024, free // 1024, total // 1024, low // 1024
+    )
+
+def mem_update_and_maybe_log(current_seconds):
+    global mem_min_free, mem_last_report_sec, mem_stats_line
+    # Track low-water continuously with minimal churn
+    free_now = gc.mem_free()
+    if free_now < mem_min_free:
+        mem_min_free = free_now
+    # Emit a line every ~30s; also refresh the cached text
+    if current_seconds % 30 == 0 and current_seconds != mem_last_report_sec:
+        # Collect before sampling for a stable reading; do it sparsely
+        gc.collect()
+        alloc = gc.mem_alloc()
+        free = gc.mem_free()
+        mem_stats_line = _format_mem_line(alloc, free, mem_min_free)
+        print(mem_stats_line)
+        mem_last_report_sec = current_seconds
+
 def build_status_text(t, h):
+    # Include latest memory snapshot as a third line; if none yet, build one ad-hoc
+    global mem_stats_line
+    if not mem_stats_line:
+        alloc = gc.mem_alloc()
+        free = gc.mem_free()
+        mem_stats_line = _format_mem_line(alloc, free, mem_min_free)
     return (
         f"T: {t}c {avgTemp:.0f} {temp5m} {temp10m} {temp30m} {temp60m}\n"
         f"H: {h}% {avgHum:.0f} {hum5m} {hum10m} {hum30m} {hum60m}\n"
+        + mem_stats_line + "\n"
     )
 
 def build_data_json(points: int):
@@ -257,7 +293,8 @@ def build_data_json(points: int):
     return json.dumps({"t": out_t, "h": out_h})
 
 def build_html_page():
-    hours_max = POINTS_MAX / 3600
+    # Maximum whole hours supported by POINTS_MAX
+    hours_max = int(POINTS_MAX // 3600)
     return (
         "<!doctype html><html><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
@@ -270,16 +307,17 @@ def build_html_page():
         "<div id='bar'>"
         "<label>Points <input id='points' type='number' min='30' max='" + str(POINTS_MAX) + "' step='10' value='" + str(POINTS_DEFAULT) + "'></label>"
         "<label style='margin-left:8px'>Decimate <input id='dec' type='checkbox' checked></label>"
-        "<label style='margin-left:8px'>Hours <input id='hours' type='number' min='0.1' max='" + ("%.2f" % hours_max) + "' step='0.1' value='" + ("%.1f" % hours_max) + "'></label>"
+        "<label style='margin-left:8px'>Hours <input id='hours' type='number' min='1' max='" + str(hours_max) + "' step='1' value='1'></label>"
         "<div class='legend'><span class='dot' style='background:#4fc3f7'></span>Temp <span class='dot' style='background:#81c784'></span>Hum</div>"
         "</div>"
         "<canvas id='chart' width='800' height='240'></canvas>"
         "<pre id='txt' style='opacity:.7'></pre>"
+        "<pre style='opacity:.7'>" + str(mem_stats_line) + "</pre>"
         "<script>(function(){\n"
         "const cvs=document.getElementById('chart');\nconst ctx=cvs.getContext('2d');\n"
         "const txt=document.getElementById('txt');\nconst pointsEl=document.getElementById('points');\nconst decEl=document.getElementById('dec');\nconst hoursEl=document.getElementById('hours');\n"
         "let pts=parseInt(pointsEl.value)||" + str(POINTS_DEFAULT) + ";\n"
-        "let fetchPts=Math.max(10,Math.min(" + str(POINTS_MAX) + ",Math.floor((parseFloat(hoursEl.value)||" + ("%.1f" % hours_max) + ")*3600)));\n"
+        "let fetchPts=(function(){let hv=parseInt(hoursEl.value)||1;hv=Math.max(1,Math.min(" + str(hours_max) + ",hv));return Math.max(10,Math.min(" + str(POINTS_MAX) + ",hv*3600));})();\n"
         "function scale(vals,min,max,size){const out=new Array(vals.length);const k=size/(max-min||1);for(let i=0;i<vals.length;i++)out[i]=(vals[i]-min)*k;return out}\n"
         "function bucketMinMax(vals, buckets){buckets=Math.max(1,Math.min(buckets,vals.length));const size=vals.length/buckets;const mins=new Array(buckets);const maxs=new Array(buckets);const avgs=new Array(buckets);for(let b=0;b<buckets;b++){let start=Math.floor(b*size), end=Math.floor((b+1)*size);if(b===buckets-1)end=vals.length;let mn=Infinity,mx=-Infinity,sum=0,c=0;for(let i=start;i<end;i++){const v=vals[i];if(v<mn)mn=v;if(v>mx)mx=v;sum+=v;c++}if(c===0){mn=mx=vals[Math.min(start,vals.length-1)];sum=mn;c=1}mins[b]=mn;maxs[b]=mx;avgs[b]=sum/c}return {mins,maxs,avgs}}\n"
         "function drawBand(xCount, minScaled, maxScaled, color){const w=cvs.width,h=cvs.height;const step=(w/(xCount-1||1));ctx.beginPath();for(let i=0;i<xCount;i++){const x=i*step, y=h-maxScaled[i];if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y)}for(let i=xCount-1;i>=0;i--){const x=i*step, y=h-minScaled[i];ctx.lineTo(x,y)}ctx.closePath();ctx.fillStyle=color;ctx.globalAlpha=0.15;ctx.fill();ctx.globalAlpha=1}\n"
@@ -302,10 +340,11 @@ def build_html_page():
         "if(uBand){const sumin=scale(uBand.mins,mn,mx,h), sumax=scale(uBand.maxs,mn,mx,h);drawBand(uBand.mins.length, sumin, sumax, '#81c784');}\n"
         "// Plot lines\nplot(st,'#4fc3f7'); plot(su,'#81c784');\n"
         "// Overall min/max overlays\nctx.strokeStyle='#394a5f';ctx.setLineDash([4,4]);ctx.beginPath();ctx.moveTo(0,h-scale([mn],mn,mx,h)[0]);ctx.lineTo(w,h-scale([mn],mn,mx,h)[0]);ctx.stroke();ctx.beginPath();ctx.moveTo(0,h-scale([mx],mn,mx,h)[0]);ctx.lineTo(w,h-scale([mx],mn,mx,h)[0]);ctx.stroke();ctx.setLineDash([]);\n"
-        "txt.textContent='min:'+mn+' max:'+mx+' last T:'+t[t.length-1]+' H:'+u[u.length-1]+' | hrs:'+((fetchPts/3600).toFixed(2))+' pts:'+pts;}\n"
+        "const rawN=t.length, plotN=tt.length; const decMsg=(decEl.checked&&plotN<rawN)?(rawN+'→'+plotN):'off';\n"
+        "txt.textContent='min:'+mn+' max:'+mx+' last T:'+t[t.length-1]+' H:'+u[u.length-1]+' | hrs:'+((fetchPts/3600).toFixed(0))+' pts:'+pts+' dec:'+decMsg;}\n"
         "async function tick(){try{const r=await fetch('/data?points='+fetchPts,{cache:'no-store'});const d=await r.json();draw(d)}catch(e){/* ignore */}}\n"
         "function clampPts(){let v=parseInt(pointsEl.value)||" + str(POINTS_DEFAULT) + ";v=Math.max(10,Math.min(" + str(POINTS_MAX) + ",v));pts=v;pointsEl.value=v;}\n"
-        "function clampHours(){let hv=parseFloat(hoursEl.value)||" + ("%.1f" % hours_max) + ";hv=Math.max(0.1,Math.min(" + ("%.2f" % hours_max) + ",hv));hoursEl.value=hv.toFixed(1);fetchPts=Math.max(10,Math.min(" + str(POINTS_MAX) + ",Math.floor(hv*3600)));}\n"
+        "function clampHours(){let hv=parseInt(hoursEl.value)||1;hv=Math.max(1,Math.min(" + str(hours_max) + ",hv));hoursEl.value=hv;fetchPts=Math.max(10,Math.min(" + str(POINTS_MAX) + ",hv*3600));}\n"
         "pointsEl.addEventListener('change',()=>{clampPts();tick()});\n"
         "decEl.addEventListener('change',()=>{tick()});\n"
         "hoursEl.addEventListener('change',()=>{clampHours();tick()});\n"
@@ -320,6 +359,8 @@ while True:
     # Increment all count variables
     sleepCount += 1
     displayMoveCount += 1
+    # Memory: update low-water and log every ~30s
+    mem_update_and_maybe_log(sleepCount)
 
     sensor.measure()
     temp = sensor.temperature()
@@ -425,7 +466,7 @@ while True:
 #     print(f"H: {hum}% {avgHum:.0f} {hum5m:.0f} {hum10m:.0f} {hum30m:.0f} {hum60m:.0f}")
     print(f"T: {temp}c {avgTemp:.0f} {temp5m} {temp10m} {temp30m} {temp60m}")
     print(f"H: {hum}% {avgHum:.0f} {hum5m} {hum10m} {hum30m} {hum60m}")
-    print(f"Mem free: {gc.mem_free()/1024:.2f}KB {len(tempList)}")
+    # Memory line is logged periodically by mem_update_and_maybe_log()
     # print(tempList)
     # print(humList)
         
