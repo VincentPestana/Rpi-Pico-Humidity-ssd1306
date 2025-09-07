@@ -75,6 +75,30 @@ def start_http_server():
         server_sock = None
         return None
 
+def _send_all(conn, data):
+    """Reliable send that handles partial writes.
+    Accepts str or bytes; encodes str as UTF-8 once, then loops until sent.
+    """
+    try:
+        if isinstance(data, str):
+            data = data.encode('utf-8')
+        mv = memoryview(data)
+        total = len(mv)
+        sent = 0
+        while sent < total:
+            n = conn.send(mv[sent:])
+            if n is None:
+                # Some stacks return None on non-blocking progress; treat as 0
+                n = 0
+            if n <= 0:
+                # Avoid tight spin; yield briefly
+                sleep(0.001)
+                continue
+            sent += n
+    except Exception:
+        # Re-raise to let caller decide how to handle
+        raise
+
 def http_poll_and_respond(build_text, build_json, build_html):
     """Try to accept a single connection and respond; non-blocking.
     build_text(): returns plain text status
@@ -127,8 +151,13 @@ def http_poll_and_respond(build_text, build_json, build_html):
                 "Connection: close\r\n"
                 "Cache-Control: no-store\r\n\r\n"
             )
-            conn.send(hdr)
-            conn.send(payload)
+            _send_all(conn, hdr)
+            # Allow a little more time for larger JSON bodies
+            try:
+                conn.settimeout(2)
+            except Exception:
+                pass
+            _send_all(conn, payload)
         elif path == "/text":
             payload = build_text()
             hdr = (
@@ -137,8 +166,8 @@ def http_poll_and_respond(build_text, build_json, build_html):
                 "Connection: close\r\n"
                 "Cache-Control: no-store\r\n\r\n"
             )
-            conn.send(hdr)
-            conn.send(payload)
+            _send_all(conn, hdr)
+            _send_all(conn, payload)
         else:
             # default dashboard
             payload = build_html()
@@ -148,8 +177,8 @@ def http_poll_and_respond(build_text, build_json, build_html):
                 "Connection: close\r\n"
                 "Cache-Control: no-store\r\n\r\n"
             )
-            conn.send(hdr)
-            conn.send(payload)
+            _send_all(conn, hdr)
+            _send_all(conn, payload)
     except Exception as e:
         try:
             conn.send("HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\n\r\n")
