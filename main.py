@@ -354,7 +354,7 @@ def build_html_page():
         "// Overall min/max overlays\nctx.strokeStyle='#394a5f';ctx.setLineDash([4,4]);ctx.beginPath();ctx.moveTo(0,h-scale([mn],mn,mx,h)[0]);ctx.lineTo(w,h-scale([mn],mn,mx,h)[0]);ctx.stroke();ctx.beginPath();ctx.moveTo(0,h-scale([mx],mn,mx,h)[0]);ctx.lineTo(w,h-scale([mx],mn,mx,h)[0]);ctx.stroke();ctx.setLineDash([]);\n"
         "const rawN=t.length, plotN=tt.length; const decMsg=(decEl.checked&&plotN<rawN)?(rawN+'→'+plotN):'off';\n"
         "txt.textContent='min:'+mn+' max:'+mx+' last T:'+t[t.length-1]+' H:'+u[u.length-1]+' | hrs:'+((fetchPts/3600).toFixed(0))+' pts:'+pts+' dec:'+decMsg;}\n"
-        "async function tick(){try{const r=await fetch('/data?points='+fetchPts,{cache:'no-store'});const d=await r.json();draw(d)}catch(e){/* ignore */}}\n"
+        "async function tick(){try{const r=await fetch('/data?points='+fetchPts,{cache:'no-store'});const d=await r.json();draw(d)}catch(e){ console.log(e)/* ignore */}}\n"
         "function clampPts(){let v=parseInt(pointsEl.value)||" + str(POINTS_DEFAULT) + ";v=Math.max(10,Math.min(" + str(POINTS_MAX) + ",v));pts=v;pointsEl.value=v;}\n"
         "function clampHours(){let hv=parseInt(hoursEl.value)||1;hv=Math.max(1,Math.min(" + str(hours_max) + ",hv));hoursEl.value=hv;fetchPts=Math.max(10,Math.min(" + str(POINTS_MAX) + ",hv*3600));}\n"
         "function clampRef(){let rv=parseInt(refEl.value)||5000;rv=Math.max(500,Math.min(60000,rv));refEl.value=rv;return rv;}\n"
