@@ -257,13 +257,53 @@ def led_off():
     rled.low()
     bled.low()
 
+# Small OLED helper for brief status messages at boot
+def _oled_status(line1: str, line2: str = "", line3: str = ""):
+    try:
+        oled.fill(0)
+        oled.contrast(1)
+        if line1:
+            oled.text(line1, 0, 0)
+        if line2:
+            oled.text(line2, 0, 10)
+        if line3:
+            oled.text(line3, 0, 20)
+        oled.show()
+    except Exception:
+        # If display isn't ready or errors, ignore silently
+        pass
+
 # Try WiFi + HTTP once at boot if credentials exist
 wlan = None
 if WIFI_SSID and WIFI_PASSWORD:
+    # Show quick connection status on OLED
+    _oled_status("Connecting to WiFi", "...please wait")
     wlan = connect_wifi(WIFI_SSID, WIFI_PASSWORD)
     if wlan and wlan.isconnected():
+        # Try to gather connection details
+        ip = None
+        rssi = None
+        try:
+            ip = wlan.ifconfig()[0]
+        except Exception:
+            ip = None
+        try:
+            # RSSI may not be supported on all ports
+            rssi = wlan.status('rssi')
+        except Exception:
+            rssi = None
+        # Show IP on line 2; RSSI on line 3 if available
+        line2 = ("IP:" + ip) if ip else ""
+        line3 = ("RSSI:{} dBm".format(rssi)) if rssi is not None else ""
+        _oled_status("WiFi Connected", line2, line3)
+        # Keep the message visible ~10 seconds
+        for _ in range(10):
+            sleep(1)
         start_http_server()
+    else:
+        _oled_status("WiFi connect failed", "HTTP disabled")
 else:
+    _oled_status("No WiFi credentials", "HTTP disabled")
     print("No WiFi credentials found in secrets.py; HTTP disabled.")
 
 # Track how many readings we have captured (for data endpoint)
