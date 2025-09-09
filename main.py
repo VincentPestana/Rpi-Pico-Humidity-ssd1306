@@ -229,6 +229,12 @@ JITTER_SECONDS = 10  # default ~10s; keep small to reduce static image time
 JITTER_X_MAX = 100    # horizontal jitter range (pixels)
 JITTER_Y_MAX = 45    # vertical jitter range (pixels; allow two 8px lines)
 
+# OLED power cycling to mitigate burn-in: 15s off, 15s on
+OLED_ON_SECONDS = 15
+OLED_OFF_SECONDS = 15
+oled_on = True
+oled_phase_count = 0
+
 # Seconds converted from minutes
 seconds5m = 5 * 60
 seconds10m = 10 * 60
@@ -513,31 +519,41 @@ while True:
     # Update circular buffer index
     current_index = (current_index + 1) % buffer_size
 
-    oled.contrast(1)
-    # Oled control
-    #if sleepCount % 5 == 0:
-#         oled.contrast(1)
-     #   oled.poweron()
-    #else:
-#         oled.contrast(0)
-        #oled.poweroff()
-    
-    oled.fill(0)
+    # OLED power cycle control: toggle every 15s
+    oled_phase_count += 1
+    if oled_on:
+        if oled_phase_count >= OLED_ON_SECONDS:
+            oled.poweroff()
+            oled_on = False
+            oled_phase_count = 0
+    else:
+        if oled_phase_count >= OLED_OFF_SECONDS:
+            oled.poweron()
+            oled_on = True
+            oled_phase_count = 0
+
+    if not oled_on:
+        # Skip drawing work while panel is off
+        pass
+    else:
+        oled.contrast(1)
+        oled.fill(0)
 #     oled.text(f"{temp:.0f} {avgTemp:>2.0f} {temp5m:>2.0f} {temp10m:>2.0f} {temp30m:>2.0f}", randomX, randomY)   
 #     oled.text(f"{hum:>2} {avgHum:>2.0f} {hum5m:>2.0f} {hum10m:>2.0f} {hum30m:>2.0f}", randomX, randomY+10)
-    oled.text(f"{temp:.0f} {temp5m} {temp10m} {temp30m} {temp60m}", randomX, randomY)   
-    oled.text(f"{hum:>2} {hum5m} {hum10m} {hum30m} {hum60m}", randomX, randomY+10)
-    # Show last IP octet when connected
-    if wlan and wlan.isconnected():
-        try:
-            ip0 = wlan.ifconfig()[0]
-            if ip0:
-                dot = ip0.rfind('.')
-                last_oct = ip0[dot+1:] if dot >= 0 else ip0
-                oled.text(last_oct, randomX, randomY+20)
-        except Exception:
-            pass
-    oled.show()
+    if oled_on:
+        oled.text(f"{temp:.0f} {temp5m} {temp10m} {temp30m} {temp60m}", randomX, randomY)   
+        oled.text(f"{hum:>2} {hum5m} {hum10m} {hum30m} {hum60m}", randomX, randomY+10)
+        # Show last IP octet when connected
+        if wlan and wlan.isconnected():
+            try:
+                ip0 = wlan.ifconfig()[0]
+                if ip0:
+                    dot = ip0.rfind('.')
+                    last_oct = ip0[dot+1:] if dot >= 0 else ip0
+                    oled.text(last_oct, randomX, randomY+20)
+            except Exception:
+                pass
+        oled.show()
 
     # Handle one HTTP request per loop if server is running
     if server_sock:
