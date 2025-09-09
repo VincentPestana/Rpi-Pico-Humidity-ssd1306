@@ -226,7 +226,7 @@ avgHum60s = 0
 # OLED burn-in mitigation: jitter settings
 # Move the on-screen text every N seconds to spread pixel wear
 JITTER_SECONDS = 10  # default ~10s; keep small to reduce static image time
-JITTER_X_MAX = 10    # horizontal jitter range (pixels)
+JITTER_X_MAX = 100    # horizontal jitter range (pixels)
 JITTER_Y_MAX = 45    # vertical jitter range (pixels; allow two 8px lines)
 
 # Seconds converted from minutes
@@ -527,6 +527,16 @@ while True:
 #     oled.text(f"{hum:>2} {avgHum:>2.0f} {hum5m:>2.0f} {hum10m:>2.0f} {hum30m:>2.0f}", randomX, randomY+10)
     oled.text(f"{temp:.0f} {temp5m} {temp10m} {temp30m} {temp60m}", randomX, randomY)   
     oled.text(f"{hum:>2} {hum5m} {hum10m} {hum30m} {hum60m}", randomX, randomY+10)
+    # Show last IP octet when connected
+    if wlan and wlan.isconnected():
+        try:
+            ip0 = wlan.ifconfig()[0]
+            if ip0:
+                dot = ip0.rfind('.')
+                last_oct = ip0[dot+1:] if dot >= 0 else ip0
+                oled.text(last_oct, randomX, randomY+20)
+        except Exception:
+            pass
     oled.show()
 
     # Handle one HTTP request per loop if server is running
