@@ -50,8 +50,9 @@ def connect_wifi(ssid: str, password: str, retries: int = 20):
 server_sock = None
 
 # Configurable history for HTTP /data (points of recent seconds)
-POINTS_DEFAULT = 900
-POINTS_MAX = 3600
+# Points now represent minutes of averaged data
+POINTS_DEFAULT = 60   # 1 hour of minute-averaged samples
+POINTS_MAX = 1440     # up to 24 hours of history
 
 def start_http_server():
     global server_sock
@@ -223,6 +224,11 @@ avgHum = 0
 avgTemp60s = 0
 avgHum60s = 0
 
+# Minute aggregation accumulators
+minute_temp_sum = 0.0
+minute_hum_sum = 0.0
+minute_sample_count = 0
+
 # OLED burn-in mitigation: jitter settings
 # Move the on-screen text every N seconds to spread pixel wear
 JITTER_SECONDS = 10  # default ~10s; keep small to reduce static image time
@@ -235,11 +241,15 @@ OLED_OFF_SECONDS = 15
 oled_on = True
 oled_phase_count = 0
 
-# Seconds converted from minutes
-seconds5m = 5 * 60
-seconds10m = 10 * 60
-seconds30m = 30 * 60
-seconds60m = 60 * 60
+# Sampling/aggregation constants
+SAMPLES_PER_MINUTE = 60
+MINUTES_5 = 5
+MINUTES_10 = 10
+MINUTES_30 = 30
+MINUTES_60 = 60
+
+# Convenience conversion for the hour-scale second counter
+SECONDS_60M = MINUTES_60 * SAMPLES_PER_MINUTE
 
 # Values 5, 10 and 30 minutes ago
 temp5m = ''
@@ -252,7 +262,8 @@ temp60m = ''
 hum60m = ''
 
 # Fixed-size circular buffers, for storing the humidity and temperature readings
-buffer_size = seconds60m + 1  # Size for 1 hour + current reading
+# Minute-averaged circular buffer (slightly oversized for wrap clarity)
+buffer_size = POINTS_MAX + 1
 tempList = [0] * buffer_size
 humList = [0] * buffer_size
 current_index = 0
@@ -312,7 +323,7 @@ else:
     _oled_status("No WiFi credentials", "HTTP disabled")
     print("No WiFi credentials found in secrets.py; HTTP disabled.")
 
-# Track how many readings we have captured (for data endpoint)
+# Track how many minute-averaged readings we have captured (for data endpoint)
 readings_count = 0
 
 # --- Lightweight memory stats helper ---
@@ -343,9 +354,15 @@ def mem_update_and_maybe_log(current_seconds):
         base = _format_mem_line(alloc, free, mem_min_free)
         # Append buffer lengths and filled count
         filled = readings_count if readings_count < buffer_size else buffer_size
-        mem_stats_line = base + " | samples:{}/{}".format(filled, buffer_size)
+        mem_stats_line = base + " | samples(min):{}/{}".format(filled, buffer_size)
         print(mem_stats_line)
         mem_last_report_sec = current_seconds
+
+
+def _hist_str(val):
+    if isinstance(val, (int, float)):
+        return "{:.1f}".format(val)
+    return val if val else "--"
 
 def build_status_text(t, h):
     # Include latest memory snapshot as a third line; if none yet, build one ad-hoc
@@ -355,10 +372,18 @@ def build_status_text(t, h):
         free = gc.mem_free()
         base = _format_mem_line(alloc, free, mem_min_free)
         filled = readings_count if readings_count < buffer_size else buffer_size
-        mem_stats_line = base + " | samples:{}/{}".format(filled, buffer_size)
+        mem_stats_line = base + " | samples(min):{}/{}".format(filled, buffer_size)
+    t5 = _hist_str(temp5m)
+    t10 = _hist_str(temp10m)
+    t30 = _hist_str(temp30m)
+    t60 = _hist_str(temp60m)
+    h5 = _hist_str(hum5m)
+    h10 = _hist_str(hum10m)
+    h30 = _hist_str(hum30m)
+    h60 = _hist_str(hum60m)
     return (
-        f"T: {t}c {avgTemp:.0f} {temp5m} {temp10m} {temp30m} {temp60m}\n"
-        f"H: {h}% {avgHum:.0f} {hum5m} {hum10m} {hum30m} {hum60m}\n"
+        f"T: {t}c {avgTemp:.0f} {t5} {t10} {t30} {t60}\n"
+        f"H: {h}% {avgHum:.0f} {h5} {h10} {h30} {h60}\n"
         + mem_stats_line + "\n"
     )
 
@@ -380,7 +405,7 @@ def build_data_json(points: int):
 
 def build_html_page():
     # Maximum whole hours supported by POINTS_MAX
-    hours_max = int(POINTS_MAX // 3600)
+    hours_max = int(POINTS_MAX // 60)
     return (
         "<!doctype html><html><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
@@ -405,7 +430,7 @@ def build_html_page():
         "const txt=document.getElementById('txt');\n"
         "const hoursEl=document.getElementById('hours');\n"
         "const refEl=document.getElementById('refms');\n"
-        "let fetchPts=(function(){let hv=parseInt(hoursEl.value)||1;hv=Math.max(1,Math.min(" + str(hours_max) + ",hv));return Math.max(10,Math.min(" + str(POINTS_MAX) + ",hv*3600));})();\n"
+        "let fetchPts=(function(){let hv=parseInt(hoursEl.value)||1;hv=Math.max(1,Math.min(" + str(hours_max) + ",hv));return Math.max(10,Math.min(" + str(POINTS_MAX) + ",hv*60));})();\n"
         "const initW = (el && el.clientWidth) ? el.clientWidth : 320;\n"
         "const opts = {\n"
         "  width: initW,\n"
@@ -428,15 +453,15 @@ def build_html_page():
         "  const nowSec = Math.floor(Date.now()/1000);\n"
         "  const n = data.t.length;\n"
         "  const times = new Array(n);\n"
-        "  for (let i=0;i<n;i++) times[i] = nowSec - (n - 1 - i);\n"
+        "  for (let i=0;i<n;i++) times[i] = nowSec - ((n - 1 - i) * 60);\n"
         "  u.setData([times, data.t, data.h]);\n"
         "  const all = data.t.concat(data.h);\n"
         "  let mn = all[0], mx = all[0];\n"
         "  for (let i=1;i<all.length;i++){ const v=all[i]; if(v<mn) mn=v; if(v>mx) mx=v; }\n"
-        "  txt.textContent = 'min:'+mn+' max:'+mx+' last T:'+data.t[n-1]+' H:'+data.h[n-1]+' | hrs:'+((fetchPts/3600).toFixed(0));\n"
+        "  txt.textContent = 'min:'+mn+' max:'+mx+' last T:'+data.t[n-1]+' H:'+data.h[n-1]+' | hrs:'+((fetchPts/60).toFixed(1));\n"
         "}\n"
         "async function tick(){try{const r=await fetch('/data?points='+fetchPts,{cache:'no-store'});const d=await r.json();draw(d)}catch(e){ /* ignore */ }}\n"
-        "function clampHours(){let hv=parseInt(hoursEl.value)||1;hv=Math.max(1,Math.min(" + str(hours_max) + ",hv));hoursEl.value=hv;fetchPts=Math.max(10,Math.min(" + str(POINTS_MAX) + ",hv*3600));}\n"
+        "function clampHours(){let hv=parseInt(hoursEl.value)||1;hv=Math.max(1,Math.min(" + str(hours_max) + ",hv));hoursEl.value=hv;fetchPts=Math.max(10,Math.min(" + str(POINTS_MAX) + ",hv*60));}\n"
         "function clampRef(){let rv=parseInt(refEl.value)||2000;rv=Math.max(500,Math.min(60000,rv));refEl.value=rv;return rv;}\n"
         "let _timer=null; function applyInterval(){const rv=clampRef(); if(_timer){clearInterval(_timer);} _timer=setInterval(tick,rv);}\n"
         "hoursEl.addEventListener('change',()=>{clampHours();tick()});\n"
@@ -460,10 +485,21 @@ while True:
     temp = sensor.temperature()
     hum = sensor.humidity()
 
-    # Circular buffer update, for humidity and temperature readings
-    tempList[current_index] = temp
-    humList[current_index] = hum
-    readings_count += 1
+    # Accumulate readings for a minute-average entry
+    minute_temp_sum += temp
+    minute_hum_sum += hum
+    minute_sample_count += 1
+
+    if minute_sample_count >= SAMPLES_PER_MINUTE:
+        avg_temp_minute = round(minute_temp_sum / minute_sample_count, 1)
+        avg_hum_minute = round(minute_hum_sum / minute_sample_count, 1)
+        tempList[current_index] = avg_temp_minute
+        humList[current_index] = avg_hum_minute
+        readings_count += 1
+        current_index = (current_index + 1) % buffer_size
+        minute_temp_sum = 0.0
+        minute_hum_sum = 0.0
+        minute_sample_count = 0
     
     # LED logic
     if temp < 40:
@@ -500,29 +536,36 @@ while True:
         randomX = random.randint(0, JITTER_X_MAX)
         randomY = random.randint(0, JITTER_Y_MAX)
     
-    # Update the historical readings using circular buffer math
-    if sleepCount >= seconds5m:
-        index_5m = (current_index - seconds5m) % buffer_size
+    # Update the historical readings using circular buffer math (minute offsets)
+    if readings_count >= MINUTES_5:
+        index_5m = (current_index - MINUTES_5) % buffer_size
         temp5m = tempList[index_5m]
         hum5m = humList[index_5m]
-    if sleepCount >= seconds10m:
-        index_10m = (current_index - seconds10m) % buffer_size
+    if readings_count >= MINUTES_10:
+        index_10m = (current_index - MINUTES_10) % buffer_size
         temp10m = tempList[index_10m]
         hum10m = humList[index_10m]
-    if sleepCount >= seconds30m:
-        index_30m = (current_index - seconds30m) % buffer_size
+    if readings_count >= MINUTES_30:
+        index_30m = (current_index - MINUTES_30) % buffer_size
         temp30m = tempList[index_30m]
         hum30m = humList[index_30m]
-    if sleepCount >= seconds60m:
-        index_60m = (current_index - seconds60m) % buffer_size
+    if readings_count >= MINUTES_60:
+        index_60m = (current_index - MINUTES_60) % buffer_size
         temp60m = tempList[index_60m]
         hum60m = humList[index_60m]
-        # Reset sleep count but don't pop list items anymore
+
+    if sleepCount >= SECONDS_60M:
+        # Reset sleep count periodically to keep values bounded
         sleepCount = 0
 
-    # Update circular buffer index
-    current_index = (current_index + 1) % buffer_size
-
+    t5_str = _hist_str(temp5m)
+    t10_str = _hist_str(temp10m)
+    t30_str = _hist_str(temp30m)
+    t60_str = _hist_str(temp60m)
+    h5_str = _hist_str(hum5m)
+    h10_str = _hist_str(hum10m)
+    h30_str = _hist_str(hum30m)
+    h60_str = _hist_str(hum60m)
     # OLED power cycle control: toggle every 15s
     oled_phase_count += 1
     if oled_on:
@@ -545,8 +588,8 @@ while True:
 #     oled.text(f"{temp:.0f} {avgTemp:>2.0f} {temp5m:>2.0f} {temp10m:>2.0f} {temp30m:>2.0f}", randomX, randomY)   
 #     oled.text(f"{hum:>2} {avgHum:>2.0f} {hum5m:>2.0f} {hum10m:>2.0f} {hum30m:>2.0f}", randomX, randomY+10)
     if oled_on:
-        oled.text(f"{temp:.0f} {temp5m} {temp10m} {temp30m} {temp60m}", randomX, randomY)   
-        oled.text(f"{hum:>2} {hum5m} {hum10m} {hum30m} {hum60m}", randomX, randomY+10)
+        oled.text(f"{temp:.0f} {t5_str} {t10_str} {t30_str} {t60_str}", randomX, randomY)   
+        oled.text(f"{hum:>2} {h5_str} {h10_str} {h30_str} {h60_str}", randomX, randomY+10)
         # Show last IP octet when connected
         if wlan and wlan.isconnected():
             try:
@@ -578,7 +621,10 @@ while True:
     
 #     print(f"T: {temp}c {avgTemp:.0f} {temp5m:.0f} {temp10m:.0f} {temp30m:.0f} {temp60m:.0f}")
 #     print(f"H: {hum}% {avgHum:.0f} {hum5m:.0f} {hum10m:.0f} {hum30m:.0f} {hum60m:.0f}")
-    print(f"T: {temp}c {avgTemp:.0f} {temp5m} {temp10m} {temp30m} {temp60m}\nH: {hum}% {avgHum:.0f} {hum5m} {hum10m} {hum30m} {hum60m}")
+    print(
+        f"T: {temp}c {avgTemp:.0f} {t5_str} {t10_str} {t30_str} {t60_str}\n"
+        f"H: {hum}% {avgHum:.0f} {h5_str} {h10_str} {h30_str} {h60_str}"
+    )
     # print(f"H: {hum}% {avgHum:.0f} {hum5m} {hum10m} {hum30m} {hum60m}")
     # Memory line is logged periodically by mem_update_and_maybe_log()
     # print(tempList)
